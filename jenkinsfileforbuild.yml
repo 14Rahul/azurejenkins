@@ -1,0 +1,123 @@
+
+//Create 3 Choice perameter MAJOR, MINOR, BUG_FIX 
+
+pipeline {
+
+
+    agent {
+        label "master"
+    }
+    tools {
+        maven "Maven"
+    }
+    environment {
+        NEXUS_VERSION = "nexus3"
+        NEXUS_PROTOCOL = "http"
+        NEXUS_URL = "20.204.151.243:8081"
+        NEXUS_REPOSITORY = "devopsnexusstage"
+        NEXUS_CREDENTIAL_ID = "c1c60d11-d25b-4271-a821-4287bc4fb469"
+
+        
+    }
+    stages {
+        stage("Clone code from VCS") {
+            steps {
+                script {
+                    git 'https://github.com/nseitcoe/devopstage2.git';
+                }
+            }
+        }
+        stage("Maven Build") {
+            steps {
+                script {
+                    def lastSuccessBuildName
+                    if(Jenkins.instance.getItem(env.JOB_NAME).lastSuccessfulBuild.displayName == "null"){
+                        lastSuccessBuildName = "0.0.0"
+                    }else {
+                        lastSuccessBuildName = Jenkins.instance.getItem(env.JOB_NAME).lastSuccessfulBuild.displayName
+                    }
+                    
+                    def veri =  lastSuccessBuildName.split("\\.")
+                    
+                    if(params.Version == 'MAJOR') {
+                        Integer major = veri[0] as Integer;
+                        major = major + 1
+                        env.POM_VER = "$major.0.0"
+                        sh (script: "mvn clean install")
+                    }else if(params.Version == 'MINOR'){
+                        Integer minor1 = veri[0] as Integer;
+                        Integer minor = veri[1] as Integer;
+                        minor = minor + 1
+                        env.POM_VER = "$minor1.$minor.0"
+                        sh (script: "mvn clean install")
+                    }else if(params.Version == 'BUG_FIX'){
+                        Integer bugfix1 = veri[0] as Integer;
+                        Integer bugfix2 = veri[1] as Integer;
+                        Integer bugfix = veri[2] as Integer;
+                        bugfix = bugfix + 1
+                        env.POM_VER = "$bugfix1.$bugfix2.$bugfix"
+                        sh (script: "mvn clean install")
+                    }
+                    
+                }
+            }
+        }
+        stage("Publish to Nexus Repository Manager") {
+            steps {
+                script {
+                    def data = new File('/home/azureuser/versions/prod-version.txt')
+                    def line = data.readLines()[0]
+                    pom = readMavenPom file: "pom.xml";
+                    filesByGlob = findFiles(glob: "target/*.${pom.packaging}");
+                    echo "${filesByGlob[0].name} ${filesByGlob[0].path} ${filesByGlob[0].directory} ${filesByGlob[0].length} ${filesByGlob[0].lastModified}"
+                    artifactPath = filesByGlob[0].path;
+                    artifactExists = fileExists artifactPath;
+                    if(artifactExists) {
+                        echo "*** File: ${artifactPath}, group: ${pom.groupId}, packaging: ${pom.packaging}, version ${pom.version}";
+                        nexusArtifactUploader(
+                            nexusVersion: NEXUS_VERSION,
+                            protocol: NEXUS_PROTOCOL,
+                            nexusUrl: NEXUS_URL,
+                            groupId: pom.groupId,
+                            version: "${env.POM_VER}",
+                            repository: NEXUS_REPOSITORY,
+                            credentialsId: NEXUS_CREDENTIAL_ID,
+                            artifacts: [
+                                [artifactId: pom.artifactId,
+                                classifier: '',
+                                file: artifactPath,
+                                type: pom.packaging],
+                                [artifactId: pom.artifactId,
+                                classifier: '',
+                                file: "pom.xml",
+                                type: "pom"]
+                            ]
+                        );
+                        
+                    } else {
+                        error "*** File: ${artifactPath}, could not be found";
+                    
+                    }
+                }
+                
+            }
+        }
+        stage("Last stage") {
+            steps {
+                script {
+                    pom = readMavenPom file: "pom.xml";
+                    GIT_COMMIT_HASH = sh (script: "git log -n 1 --pretty=format:'%H'", returnStdout: true)
+                    def data = new File('/home/azureuser/versions/prod-version.txt')
+                    def line = data.readLines()[0]
+                    def lastSuccessBuildName = Jenkins.instance.getItem(env.JOB_NAME).lastSuccessfulBuild.displayName
+                    currentBuild.displayName = "${env.POM_VER}"
+                    currentBuild.description = "${GIT_COMMIT_HASH}"
+                    echo "Last Success Build Name: ${lastSuccessBuildName}"
+
+                    
+                    
+                }
+            }
+        }
+    }
+}
