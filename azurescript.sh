@@ -12,3 +12,4 @@ sudo java -jar -Dserver.port=80 \
 *.jar > /dev/null 2> /dev/null < /dev/null &
 
 # create Library Variable group and create the variable and access it in release
+# Link Variable group in release pipeline
