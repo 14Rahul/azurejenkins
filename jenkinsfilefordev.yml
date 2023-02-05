@@ -1,0 +1,144 @@
+
+pipeline {
+
+
+    agent {
+        label "master"
+    }
+    tools {
+        maven "Maven"
+    }
+    environment {
+        NEXUS_VERSION = "nexus3"
+        NEXUS_PROTOCOL = "http"
+        NEXUS_URL = "20.204.151.243:8081"
+        NEXUS_REPOSITORY = "devrepo"
+        NEXUS_CREDENTIAL_ID = "c1c60d11-d25b-4271-a821-4287bc4fb469"
+
+        
+    }
+    stages {
+        stage("Clone code from VCS") {
+            steps {
+                script {
+                    git branch: 'dev', url: 'https://github.com/nseitcoe/devopstage2.git';
+                }
+            }
+        }
+        stage("Maven Build") {
+            steps {
+                script {
+                    sh (script: "mvn clean install")
+                    
+                }
+            }
+        }
+        stage("Publish to Nexus Repository Manager") {
+            steps {
+                script {
+                    pom = readMavenPom file: "pom.xml";
+                    filesByGlob = findFiles(glob: "target/*.${pom.packaging}");
+                    echo "${filesByGlob[0].name} ${filesByGlob[0].path} ${filesByGlob[0].directory} ${filesByGlob[0].length} ${filesByGlob[0].lastModified}"
+                    artifactPath = filesByGlob[0].path;
+                    artifactExists = fileExists artifactPath;
+                    if(artifactExists) {
+                        echo "*** File: ${artifactPath}, group: ${pom.groupId}, packaging: ${pom.packaging}, version ${pom.version}";
+                        nexusArtifactUploader(
+                            nexusVersion: NEXUS_VERSION,
+                            protocol: NEXUS_PROTOCOL,
+                            nexusUrl: NEXUS_URL,
+                            groupId: pom.groupId,
+                            version: pom.version,
+                            repository: NEXUS_REPOSITORY,
+                            credentialsId: NEXUS_CREDENTIAL_ID,
+                            artifacts: [
+                                [artifactId: pom.artifactId,
+                                classifier: '',
+                                file: artifactPath,
+                                type: pom.packaging],
+                                [artifactId: pom.artifactId,
+                                classifier: '',
+                                file: "pom.xml",
+                                type: "pom"]
+                            ]
+                        );
+                        
+                    } else {
+                        error "*** File: ${artifactPath}, could not be found";
+                    
+                    }
+                }
+                
+            }
+        }
+           stage('Download Artifact') {
+      steps {
+        script{
+            
+            echo params.artifactversion
+                cleanWs()
+                
+                sh '''
+                   curl -L -X GET "http://20.204.151.243:8081/service/rest/v1/search/assets/download?repository=devrepo&group=org.springframework&maven.baseVersion=2.0-SNAPSHOT&sort=version" --output java.jar
+                '''
+          
+        }
+      }
+    }
+
+
+  stage('Archive Artifact') {
+      steps {
+            script{
+               archiveArtifacts artifacts: '*.jar', followSymlinks: false
+            }
+      }
+  }
+
+  stage('Build Stage') {
+      steps {
+            script{
+                def num="http://20.204.151.243:8080/job/stage2dev/${env.BUILD_NUMBER}/artifact/java.jar"
+                def abcd = sh(script: "az pipelines variable-group variable update --group-id 1 --name tiger --org https://dev.azure.com/COEDevOpsProject --project stage2devops --value '${num}'", returnStdout:true)
+                
+                
+                sh '''az pipelines release create --organization https://dev.azure.com/COEDevOpsProject --project stage2devops --definition-name Dev_Pipeline'''
+                sh '''
+                az devops configure --defaults organization=https://dev.azure.com/COEDevOpsProject/
+                az devops configure --defaults project=stage2devops'''
+                
+                def abc = sh(script: "az pipelines release list --definition-id 10 |jq '.[].id'", returnStdout:true)
+      
+                def azz = abc.split('\n')[0]
+                echo "hiiiii $azz"
+                
+                String status = sh(script: "az pipelines release show --id $azz | jq '.environments | .[] |.status' -r", returnStdout:true).trim()
+                echo "hiiiii $status"
+                
+                while(status=="inProgress"){
+                    status = sh(script: "az pipelines release show --id $azz | jq '.environments | .[] |.status' -r", returnStdout:true).trim()
+                }
+                status = sh(script: "az pipelines release show --id $azz | jq '.environments | .[] |.status' -r", returnStdout:true).trim()
+                echo "hiiiii $status"
+                if(status=="rejected"){
+                    error "Pipeline Terminated"
+                }
+                
+                
+                
+                
+               
+            }
+      }
+  }
+    
+  stage('Upload To Blob') {
+      steps {
+            script{
+                
+                azureUpload containerName: 'devtest', filesPath: '*.jar', storageCredentialId: 'c6ba666f-a991-4297-8650-c6e52557a6a6', storageType: 'blobstorage'
+            }
+      }
+  }
+    }
+}
